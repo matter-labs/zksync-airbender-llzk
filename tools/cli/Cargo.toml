@@ -1,0 +1,47 @@
+[package]
+name = "cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "cli_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cli"
+path = "src/main.rs"
+
+[dependencies]
+prover = { workspace = true, features = ["prover"] }
+trace_and_split = { workspace = true }
+setups = { workspace = true }
+serde = { workspace = true }
+serde_json = "*"
+prover_examples = { path = "../../circuit_defs/prover_examples", default-features = false }
+worker = {path = "../../worker"}
+clap = { workspace = true }
+blake2s_u32 = { workspace = true }
+execution_utils = { path = "../../execution_utils", default-features = false, features = ["prover", "verifier_binaries"] }
+riscv_transpiler = { path = "../../riscv_transpiler" }
+field = { workspace = true }
+
+verifier_common = { workspace = true }
+reqwest = { version = "0.12.12", features = ["blocking", "json"] }
+sha3 = { package = "sha3", version = "*" }
+
+gpu_prover = { workspace = true, optional = true, default-features = false }
+
+env_logger = "0.11"
+base64 = "0.21.7"
+
+
+[features]
+debug_logs = ["prover/debug_logs", "prover_examples/debug_logs"]
+# if enabled - allow GPU for proving.
+gpu = ["prover_examples/gpu", "gpu_prover", "execution_utils/gpu_prover"]

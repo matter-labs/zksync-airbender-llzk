@@ -1,0 +1,31 @@
+[files]
+extend-exclude = [
+    "*.json",
+    "*.lock",
+    "*.bin",
+    "*.elf",
+    "*.pdf",
+    "*.png",
+    "*.text",
+    "*.bak",
+    "*.svg",
+    ".git/",
+    "SECURITY.md"
+]
+
+[default.extend-words]
+ND = "ND"
+nd = "nd"
+ba = "ba"
+pn = "pn"
+sie = "sie"
+Sie = "Sie"
+tou = "tou"
+leafs = "leafs"
+LEAFS = "LEAFS"
+INOT = "INOT"
+inot = "inot"
+
+[type.asm.extend-words]
+Wich = "Wich"
+TRE = "TRE"

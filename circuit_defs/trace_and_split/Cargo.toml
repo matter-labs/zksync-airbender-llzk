@@ -1,0 +1,19 @@
+[package]
+name = "trace_and_split"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+common_constants = { workspace = true }
+setups = { workspace = true }
+prover = { workspace = true, features = ["prover"] }
+riscv_transpiler = { workspace = true }
+serde = { workspace = true }
+worker = { workspace = true }
+serde_json = "*"

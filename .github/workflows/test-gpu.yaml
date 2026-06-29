@@ -1,0 +1,161 @@
+name: Test on GPU
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+  packages: read
+  actions: read
+
+jobs:
+  zksync-airbender-build:
+    runs-on: [ matterlabs-ci-runner-highmem ]
+    strategy:
+      fail-fast: false
+      matrix:
+        # matterlabs-ci-gpu-runner currently has CUDA 12.2 driver support only, so
+        # CUDA 13-compiled binaries are not runnable there.
+        cuda: [ "12.9.1-devel-ubuntu22.04" ]
+    container:
+      image: nvidia/cuda:${{ matrix.cuda }}
+    env:
+      RUST_TOOLCHAIN: nightly-2026-02-10
+    steps:
+      - name: Prepare environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt update && apt install -y cmake git libssl-dev pkg-config wget curl
+          echo "/usr/local/nvidia/bin:/usr/local/cuda/bin" >> $GITHUB_PATH
+
+      - uses: actions/checkout@93ea575cb5d8a053eaa0ac8fa3b40d7e05a33cc8 # v3
+
+      - name: Setup rustup
+        run: |
+          wget -q -O - https://sh.rustup.rs | bash -s -- -y --default-toolchain $RUST_TOOLCHAIN --profile minimal
+          echo "${HOME}/.cargo/bin" >> "${GITHUB_PATH}"
+          echo "export PATH=\"$HOME/.cargo/bin:\$PATH\"" >> "${HOME}/.bash_profile"
+
+      # we need cmake 3.30 (as 3.24 doesn't properly pass cuda_standard_20)
+      - name: Setup CMAKE
+        run: |
+          curl -LO https://github.com/Kitware/CMake/releases/download/v3.30.2/cmake-3.30.2-linux-x86_64.sh && \
+            chmod +x cmake-3.30.2-linux-x86_64.sh && \
+            ./cmake-3.30.2-linux-x86_64.sh --skip-license --prefix=/usr/local
+
+      - name: Check CUDA version
+        run: |
+          nvcc --version
+
+      - name: Build CLI and copy binary to a separate dir
+        shell: bash
+        run: |
+          mkdir artifacts
+          # Build one CLI binary with GPU support, then exercise each runtime
+          # security level in the test matrix below.
+          # Build for A100 (sm_80), L4 (sm_89), and H100 (sm_90).
+          CUDAARCHS="80;89;90" \
+          cargo +$RUST_TOOLCHAIN build -p cli --features "gpu" --release --target x86_64-unknown-linux-gnu
+          cp target/x86_64-unknown-linux-gnu/release/cli artifacts/cli
+
+      - name: Upload CLI binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: zksync-airbender-${{ matrix.cuda }}-cli
+          path: artifacts/cli
+          if-no-files-found: error
+
+  zksync-airbender-test:
+    runs-on: [ matterlabs-ci-gpu-runner ]
+    strategy:
+      fail-fast: false
+      matrix:
+        # Keep this aligned with the build matrix because runner driver support is
+        # currently limited to CUDA 12.2 (CUDA 13 artifacts fail at runtime).
+        cuda: [ "12.9.1-devel-ubuntu22.04" ]
+        security_level: [ "80", "100" ]
+
+    needs: zksync-airbender-build
+    steps:
+      - name: Prepare environment
+        run: |
+          echo "/usr/local/nvidia/bin:/usr/local/cuda/bin" >> $GITHUB_PATH
+
+      - uses: actions/checkout@93ea575cb5d8a053eaa0ac8fa3b40d7e05a33cc8 # v3
+
+      - name: Check Nvidia driver version
+        run: |
+          nvidia-smi
+
+      - name: Configure low VRAM mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          gpu_info="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader)"
+          min_full_vram_mib=32768
+          low_vram_mode=0
+          while IFS=',' read -r memory; do
+            memory_mib="$(echo "$memory" | tr -dc '0-9')"
+            if [[ "$memory_mib" -lt "$min_full_vram_mib" ]]; then
+              low_vram_mode=1
+              break
+            fi
+          done <<< "$gpu_info"
+          if [[ "$low_vram_mode" -eq 1 ]]; then
+            echo "ZKSYNC_AIRBENDER_LOW_VRAM_MODE=1" >> "$GITHUB_ENV"
+            echo "Enabled low VRAM mode"
+          else
+            echo "Low VRAM mode is not required"
+          fi
+
+      - name: Download CLI binary
+        uses: actions/download-artifact@v4
+        with:
+          name: zksync-airbender-${{ matrix.cuda }}-cli
+          path: zksync-airbender-cli/
+
+      - name: Prove recursion unified on GPU
+        run: |
+          chmod +x zksync-airbender-cli/cli
+          BIN="$PWD/examples/opcode_smoke/app.bin"
+          TEXT="$PWD/examples/opcode_smoke/app.text"
+          INPUT="$PWD/examples/opcode_smoke/input.txt"
+          zksync-airbender-cli/cli prove \
+            --bin "$BIN" \
+            --text "$TEXT" \
+            --input-file "$INPUT" \
+            --security-level ${{ matrix.security_level }} \
+            --target recursion-unified \
+            --backend gpu \
+            --output-dir output \
+            --output-file proof.json
+
+      - name: Verify recursion unified proof
+        run: |
+          BIN="$PWD/examples/opcode_smoke/app.bin"
+          TEXT="$PWD/examples/opcode_smoke/app.text"
+          verify_output="$(zksync-airbender-cli/cli verify \
+            --proof output/proof.json \
+            --bin "$BIN" \
+            --text "$TEXT")"
+          echo "$verify_output"
+          echo "$verify_output" | grep -F "output=[1330660171, 0, 0, 42, 2374183677, 305419896, 524296, 0"
+
+  # Keep branch protection tied to one stable GPU check name even if we
+  # split GPU coverage across multiple jobs or matrix entries later on.
+  gpu-checks:
+    name: gpu-checks
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - zksync-airbender-build
+      - zksync-airbender-test
+    steps:
+      - name: Decide on GPU checks
+        uses: re-actors/alls-green@05ac9388f0aebcb5727afa17fcccfecd6f8ec5fe # v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
